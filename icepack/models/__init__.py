@@ -13,4 +13,15 @@
 from icepack.models.ice_shelf import IceShelf
 from icepack.models.ice_stream import IceStream
 from icepack.models.hybrid import HybridModel
+from icepack.models.damage_transport import DamageTransport
 from icepack.models.heat_transport import HeatTransport3D
+from icepack.models.shallow_ice import ShallowIce
+
+__all__ = [
+    'IceShelf',
+    'IceStream',
+    'HybridModel',
+    'DamageTransport',
+    'HeatTransport3D',
+    'ShallowIce'
+]

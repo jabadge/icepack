@@ -1,4 +1,4 @@
-# Copyright (C) 2019 by Daniel Shapero <shapero@uw.edu>
+# Copyright (C) 2019-2020 by Daniel Shapero <shapero@uw.edu>
 #
 # This file is part of icepack.
 #
@@ -13,24 +13,35 @@
 import functools
 import sympy
 import firedrake
-from firedrake import (inner, outer, sym, Identity, tr as trace, sqrt,
-                       grad, dx, ds, ds_b, ds_v)
-from icepack.models.mass_transport import LaxWendroff
-from icepack.optimization import newton_search
-from icepack.constants import (ice_density as ρ_I, water_density as ρ_W,
-                               glen_flow_law as n, weertman_sliding_law as m,
-                               gravity as g)
-from icepack.utilities import (facet_normal_2, grad_2, diameter,
-                               add_kwarg_wrapper)
+from firedrake import (
+    inner, outer, sym, Identity, tr as trace, sqrt, dx, ds_b, ds_v
+)
+from icepack.models.friction import (
+    bed_friction, side_friction, normal_flow_penalty
+)
+from icepack.models.mass_transport import Continuity
+from icepack.optimization import MinimizationProblem, NewtonSolver
+from icepack.constants import (
+    ice_density as ρ_I,
+    water_density as ρ_W,
+    glen_flow_law as n,
+    gravity as g
+)
+from icepack.utilities import (
+    facet_normal_2,
+    grad_2,
+    add_kwarg_wrapper,
+    get_kwargs_alt
+)
 
-def gravity(u, h, s):
+
+def gravity(**kwargs):
     r"""Return the gravitational part of the ice stream action functional
 
     The gravitational part of the hybrid model action functional is
 
     .. math::
-       E(u) = -\int_\Omega\int_0^1\rho_Ig\nabla s\cdot u
-       \hspace{2pt}hd\zeta \hspace{2pt}dx
+       E(u) = -\int_\Omega\int_0^1\rho_Ig\nabla s\cdot u\; h\, d\zeta\; dx
 
     Parameters
     ----------
@@ -41,37 +52,41 @@ def gravity(u, h, s):
     s : firedrake.Function
         ice surface elevation
     """
-    return -ρ_I * g * inner(grad_2(s), u) * h * dx
+    keys = ('velocity', 'thickness', 'surface')
+    keys_alt = ('u', 'h', 's')
+    u, h, s = get_kwargs_alt(kwargs, keys, keys_alt)
+
+    return -ρ_I * g * inner(grad_2(s), u) * h
 
 
-def _legendre(n, ζ):
-    return sympy.functions.special.polynomials.legendre(n, 2 * ζ - 1)
+def _legendre(k, ζ):
+    return sympy.functions.special.polynomials.legendre(k, 2 * ζ - 1)
 
 
 @functools.lru_cache(maxsize=None)
 def _pressure_approx(N):
     ζ, ζ_sl = sympy.symbols('ζ ζ_sl', real=True, positive=True)
 
-    def coefficient(n):
-        Sn = _legendre(n, ζ)
-        norm_square = sympy.integrate(Sn**2, (ζ, 0, 1))
-        return sympy.integrate((ζ_sl - ζ) * Sn, (ζ, 0, ζ_sl)) / norm_square
+    def coefficient(k):
+        Sk = _legendre(k, ζ)
+        norm_square = sympy.integrate(Sk**2, (ζ, 0, 1))
+        return sympy.integrate((ζ_sl - ζ) * Sk, (ζ, 0, ζ_sl)) / norm_square
 
-    polynomial = sum([coefficient(n) * _legendre(n, ζ) for n in range(N)])
+    polynomial = sum([coefficient(k) * _legendre(k, ζ) for k in range(N)])
     return sympy.lambdify((ζ, ζ_sl), sympy.simplify(polynomial))
 
 
-def terminus(u, h, s, ice_front_ids=()):
+def terminus(**kwargs):
     r"""Return the terminal stress part of the hybrid model action functional
 
     The power exerted due to stress at the calving terminus :math:`\Gamma` is
 
     .. math::
         E(u) = \int_\Gamma\int_0^1\left(\rho_Ig(1 - \zeta) -
-        \rho_Wg(\zeta_{\text{sl}} - \zeta)_+\right)hd\zeta ds
+        \rho_Wg(\zeta_{\text{sl}} - \zeta)_+\right)u\cdot\nu\; h\, d\zeta\; ds
 
     where :math:`\zeta_\text{sl}` is the relative depth to sea level and the
-    :math:`(\zeta - \zeta_\text{sl})` denotes only the positive part.
+    :math:`(\zeta_\text{sl} - \zeta)_+` denotes only the positive part.
 
     Parameters
     ----------
@@ -85,20 +100,21 @@ def terminus(u, h, s, ice_front_ids=()):
         numeric IDs of the parts of the boundary corresponding to the
         calving front
     """
-    xdegree_u, zdegree_u = u.ufl_element().degree()
-    degree_h = h.ufl_element().degree()[0]
-    degree = (xdegree_u + degree_h, 2 * zdegree_u + 1)
-    metadata = {'quadrature_degree': degree}
+    keys = ('velocity', 'thickness', 'surface')
+    keys_alt = ('u', 'h', 's')
+    u, h, s = get_kwargs_alt(kwargs, keys, keys_alt)
 
-    x, y, ζ = firedrake.SpatialCoordinate(u.ufl_domain())
+    mesh = u.ufl_domain()
+    zdegree = u.ufl_element().degree()[1]
+
+    ζ = firedrake.SpatialCoordinate(mesh)[2]
     b = s - h
     ζ_sl = firedrake.max_value(-b, 0) / h
-    p_W = ρ_W * g * h * _pressure_approx(zdegree_u + 1)(ζ, ζ_sl)
+    p_W = ρ_W * g * h * _pressure_approx(zdegree + 1)(ζ, ζ_sl)
     p_I = ρ_I * g * h * (1 - ζ)
 
-    ν = facet_normal_2(u.ufl_domain())
-    dγ = ds_v(tuple(ice_front_ids), metadata=metadata)
-    return (p_I - p_W) * inner(u, ν) * h * dγ
+    ν = facet_normal_2(mesh)
+    return (p_I - p_W) * inner(u, ν) * h
 
 
 def stresses(ε_x, ε_z, A):
@@ -107,14 +123,14 @@ def stresses(ε_x, ε_z, A):
     I = Identity(2)
     tr = trace(ε_x)
     ε_e = sqrt((inner(ε_x, ε_x) + inner(ε_z, ε_z) + tr**2) / 2)
-    μ = 0.5 * A**(-1/n) * ε_e**(1/n - 1)
+    μ = 0.5 * A**(-1 / n) * ε_e**(1 / n - 1)
     return 2 * μ * (ε_x + tr * I), 2 * μ * ε_z
 
 
 def horizontal_strain(u, s, h):
     r"""Calculate the horizontal strain rate with corrections for terrain-
     following coordinates"""
-    x, y, ζ = firedrake.SpatialCoordinate(u.ufl_domain())
+    ζ = firedrake.SpatialCoordinate(u.ufl_domain())[2]
     b = s - h
     v = -((1 - ζ) * grad_2(b) + ζ * grad_2(s)) / h
     du_dζ = u.dx(2)
@@ -128,15 +144,14 @@ def vertical_strain(u, h):
     return 0.5 * du_dζ / h
 
 
-def viscosity(u, s, h, A):
+def viscosity(**kwargs):
     r"""Return the viscous part of the hybrid model action functional
 
     The viscous component of the action for the hybrid model is
 
     .. math::
         E(u) = \frac{n}{n + 1}\int_\Omega\int_0^1\left(
-        M : \dot\varepsilon_x + \tau_z\cdot\varepsilon_z\right)
-        hd\zeta\hspace{2pt}dx
+        M : \dot\varepsilon_x + \tau_z\cdot\varepsilon_z\right)h\, d\zeta\; dx
 
     where :math:`M(\dot\varepsilon, A)` is the membrane stress tensor and
     :math:`\tau_z` is the vertical shear stress vector.
@@ -147,96 +162,28 @@ def viscosity(u, s, h, A):
     as an argument when initializing model objects to use your functional
     instead.
 
-    Parameters
-    ----------
-    u : firedrake.Function
-        ice velocity
-    s : firedrake.Function
-        ice surface elevation
-    h : firedrake.Function
-        ice thickness
-    A : firedrake.Function
-        ice fluidity parameter
+    Keyword arguments
+    -----------------
+    velocity : firedrake.Function
+    surface : firedrake.Function
+    thickness : firedrake.Function
+    fluidity : firedrake.Function
+        `A` in Glen's flow law
 
     Returns
     -------
     firedrake.Form
     """
+    keys = ('velocity', 'thickness', 'surface', 'fluidity')
+    keys_alt = ('u', 'h', 's', 'A')
+    u, h, s, A = get_kwargs_alt(kwargs, keys, keys_alt)
+
     ε_x, ε_z = horizontal_strain(u, s, h), vertical_strain(u, h)
     M, τ_z = stresses(ε_x, ε_z, A)
-    return n / (n + 1) * (inner(M, ε_x) + inner(τ_z, ε_z)) * h * dx
+    return n / (n + 1) * (inner(M, ε_x) + inner(τ_z, ε_z)) * h
 
 
-def friction_stress(u, C):
-    r"""Compute the shear stress for a given sliding velocity"""
-    return -C * sqrt(inner(u, u))**(1/m - 1) * u
-
-
-def bed_friction(u, C):
-    r"""Return the bed friction part of the ice stream action functional
-
-    The frictional part of the ice stream action functional is
-
-    .. math::
-       E(u) = -\frac{m}{m + 1}\int_\Omega\tau(u, C)\cdot u\hspace{2pt}dx,
-
-    where everything is evaluated at the ice base (:math:`\zeta = 0`) and
-    :math:`\tau(u, C)` is the basal shear stress
-
-    .. math::
-       \tau(u, C) = -C|u|^{1/m - 1}u
-    """
-    τ_b = friction_stress(u, C)
-    return -m/(m + 1) * inner(τ_b, u) * ds_b
-
-
-def side_friction(u, h, Cs=firedrake.Constant(0), side_wall_ids=()):
-    r"""Return the side wall friction part of the action functional
-
-    The component of the action functional due to friction along the side
-    walls of the domain is
-
-    .. math::
-       E(u) = -\frac{m}{m + 1}\int_\Gamma\int_0^1 \tau(u, C_s)\cdot u
-       \hspace{2pt}hd\zeta\hspace{2pt}ds
-
-    where :math:`\tau(u, C_s)` is the side wall shear stress, :math:`ds`
-    is the element of surface area and :math:`\Gamma` are the side walls.
-    Side wall friction is relevant for glaciers that flow through a fjord
-    with rock walls on either side.
-    """
-    mesh = u.ufl_domain()
-    ν = facet_normal_2(mesh)
-    u_t = u - inner(u, ν) * ν
-    τ = friction_stress(u_t, Cs)
-    ids = tuple(side_wall_ids)
-    return -m/(m + 1) * inner(τ, u_t) * h * ds_v(domain=mesh, subdomain_id=ids)
-
-
-def normal_flow_penalty(u, h, scale=1.0, exponent=None, side_wall_ids=()):
-    r"""Return the penalty for flow normal to the domain boundary
-
-    For problems where a glacier flows along some boundary, e.g. a fjord
-    wall, the velocity has to be parallel to this boundary. Rather than
-    enforce this boundary condition directly, we add a penalty for normal
-    flow to the action functional.
-    """
-    mesh = u.ufl_domain()
-    ν = facet_normal_2(mesh)
-
-    # Note that this quantity has units of [length] x [dimensionless] because
-    # the mesh has a "thickness" of 1! If it had dimensions of physical
-    # thickness, we would instead use the square root of the facet area.
-    δx = firedrake.FacetArea(mesh)
-    L = diameter(mesh)
-
-    d = u.ufl_function_space().ufl_element().degree()[0]
-    exponent = d + 1 if (exponent is None) else exponent
-    penalty = scale * (L / δx)**exponent
-    return 0.5 * penalty * inner(u, ν)**2 * h * ds_v(tuple(side_wall_ids))
-
-
-class HybridModel(object):
+class HybridModel:
     r"""Class for modeling 3D glacier flow velocity
 
     This class provides functions that solve for the thickness, surface
@@ -248,38 +195,54 @@ class HybridModel(object):
     """
     def __init__(self, viscosity=viscosity, friction=bed_friction,
                  gravity=gravity, terminus=terminus,
-                 mass_transport=LaxWendroff(dimension=3)):
-        self.mass_transport = mass_transport
+                 continuity=Continuity(dimension=3)):
         self.viscosity = add_kwarg_wrapper(viscosity)
         self.friction = add_kwarg_wrapper(friction)
         self.side_friction = add_kwarg_wrapper(side_friction)
         self.gravity = add_kwarg_wrapper(gravity)
         self.terminus = add_kwarg_wrapper(terminus)
         self.penalty = add_kwarg_wrapper(normal_flow_penalty)
+        self.continuity = continuity
 
-    def action(self, u, h, s, **kwargs):
+    def action(self, **kwargs):
         r"""Return the action functional that gives the hybrid model as its
         Euler-Lagrange equations"""
-        viscosity = self.viscosity(u=u, h=h, s=s, **kwargs)
-        friction = self.friction(u=u, h=h, s=s, **kwargs)
-        side_friction = self.side_friction(u=u, h=h, s=s, **kwargs)
-        gravity = self.gravity(u=u, h=h, s=s, **kwargs)
-        terminus = self.terminus(u=u, h=h, s=s, **kwargs)
-        penalty = self.penalty(u=u, h=h, s=s, **kwargs)
+        u = kwargs.get('velocity', kwargs.get('u'))
+        h = kwargs.get('thickness', kwargs.get('h'))
 
-        return (viscosity + friction + side_friction
-                - gravity - terminus + penalty)
+        mesh = u.ufl_domain()
+        ice_front_ids = tuple(kwargs.pop('ice_front_ids', ()))
+        side_wall_ids = tuple(kwargs.pop('side_wall_ids', ()))
 
-    def scale(self, u, h, s, **kwargs):
+        viscosity = self.viscosity(**kwargs) * dx
+        gravity = self.gravity(**kwargs) * dx
+
+        friction = self.friction(**kwargs) * ds_b
+
+        ds_w = ds_v(domain=mesh, subdomain_id=side_wall_ids)
+        side_friction = self.side_friction(**kwargs) * ds_w
+        penalty = self.penalty(**kwargs) * ds_w
+
+        xdegree_u, zdegree_u = u.ufl_element().degree()
+        degree_h = h.ufl_element().degree()[0]
+        degree = (xdegree_u + degree_h, 2 * zdegree_u + 1)
+        metadata = {'quadrature_degree': degree}
+        ds_t = ds_v(domain=mesh, subdomain_id=ice_front_ids, metadata=metadata)
+        terminus = self.terminus(**kwargs) * ds_t
+
+        return (
+            viscosity + friction + side_friction - gravity - terminus + penalty
+        )
+
+    def scale(self, **kwargs):
         r"""Return the positive, convex part of the action functional
 
         The positive part of the action functional is used as a dimensional
         scale to determine when to terminate an optimization algorithm.
         """
-        return (self.viscosity(u=u, h=h, s=s, **kwargs) +
-                self.friction(u=u, h=h, s=s, **kwargs))
+        return self.viscosity(**kwargs) * dx + self.friction(**kwargs) * ds_b
 
-    def quadrature_degree(self, u, h, **kwargs):
+    def quadrature_degree(self, **kwargs):
         r"""Return the quadrature degree necessary to integrate the action
         functional accurately
 
@@ -288,73 +251,10 @@ class HybridModel(object):
         expression. By exploiting known structure of the problem, we can
         reduce the number of quadrature points while preserving accuracy.
         """
+        u = kwargs.get('velocity', kwargs.get('u'))
+        h = kwargs.get('thickness', kwargs.get('h'))
+
         xdegree_u, zdegree_u = u.ufl_element().degree()
         degree_h = h.ufl_element().degree()[0]
         return (3 * (xdegree_u - 1) + 2 * degree_h,
                 3 * max(zdegree_u - 1, 0) + zdegree_u + 1)
-
-    def diagnostic_solve(self, u0, h, s, dirichlet_ids, tol=1e-6, **kwargs):
-        r"""Solve for the ice velocity from the thickness and surface
-        elevation
-
-        Parameters
-        ----------
-        u0 : firedrake.Function
-            Initial guess for the ice velocity; the Dirichlet boundaries
-            are taken from `u0`
-        h : firedrake.Function
-            Ice thickness
-        s : firedrake.Function
-            Ice surface elevation
-        dirichlet_ids : list of int
-            list of integer IDs denoting the parts of the boundary where
-            Dirichlet boundary conditions should be applied
-        tol : float
-            dimensionless tolerance for when to terminate Newton's method
-
-        Returns
-        -------
-        u : firedrake.Function
-            Ice velocity
-
-        Other parameters
-        ----------------
-        **kwargs
-            All other keyword arguments will be passed on to the
-            `viscosity`, `friction`, `gravity`, and `terminus` functions
-            that were set when this model object was initialized
-        """
-        u = u0.copy(deepcopy=True)
-
-        boundary_ids = u.ufl_domain().exterior_facets.unique_markers
-        side_wall_ids = kwargs.get('side_wall_ids', [])
-        kwargs['side_wall_ids'] = side_wall_ids
-        kwargs['ice_front_ids'] = list(
-            set(boundary_ids) - set(dirichlet_ids) - set(side_wall_ids))
-        bcs = firedrake.DirichletBC(
-            u.function_space(), firedrake.as_vector((0, 0)), dirichlet_ids)
-        params = {'quadrature_degree': self.quadrature_degree(u, h, **kwargs)}
-
-        action = self.action(u=u, h=h, s=s, **kwargs)
-        scale = self.scale(u=u, h=h, s=s, **kwargs)
-        return newton_search(action, u, bcs, tol, scale,
-                             form_compiler_parameters=params)
-
-    def prognostic_solve(self, dt, h0, a, u, **kwargs):
-        return self.mass_transport.solve(dt, h0=h0, a=a, u=u, **kwargs)
-
-    def compute_surface(self, h, b):
-        r"""Return the ice surface elevation consistent with a given
-        thickness and bathymetry
-
-        If the bathymetry beneath a tidewater glacier is too low, the ice
-        will go afloat. The surface elevation of a floating ice shelf is
-
-        .. math::
-           s = (1 - \rho_I / \rho_W)h,
-
-        provided everything is in hydrostatic balance.
-        """
-        Q = h.ufl_function_space()
-        s_expr = firedrake.max_value(h + b, (1 - ρ_I / ρ_W) * h)
-        return firedrake.interpolate(s_expr, Q)

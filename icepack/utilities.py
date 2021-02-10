@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2019 by Daniel Shapero <shapero@uw.edu>
+# Copyright (C) 2017-2020 by Daniel Shapero <shapero@uw.edu>
 #
 # This file is part of icepack.
 #
@@ -10,9 +10,41 @@
 # The full text of the license can be found in the file LICENSE in the
 # icepack source directory or at <http://www.gnu.org/licenses/>.
 
+r"""Miscellaneous utilities for depth-averaging 3D fields, computing
+horizontal gradients of 3D fields, lifting 2D fields into 3D, etc."""
+
+import warnings
 import inspect
 import numpy as np
 import firedrake
+from firedrake import sqrt, tr, det
+from icepack.constants import ice_density as ρ_I, water_density as ρ_W
+
+
+default_solver_parameters = {
+    'ksp_type': 'preonly',
+    'pc_type': 'lu',
+    'pc_factor_mat_solver_type': 'mumps'
+}
+
+
+def get_kwargs_alt(dictionary, keys, keys_alt):
+    r"""Get value from dictionary by key or by an alternate, deprecated key
+
+    This helper function is to aid in a refactoring of icepack where shorter
+    keyword arguments were replaced by longer names, for example `velocity`
+    instead of `u`, `thickness` instead of `h`, etc. For backwards
+    compatibility, it should be possible to use either the new or old keyword
+    argument names, but a warning should be thrown on using the old name.
+    """
+    if all([key in dictionary for key in keys]):
+        return map(dictionary.__getitem__, keys)
+
+    warnings.warn(f"Abbreviated names {keys_alt} have been deprecated, use "
+                  f"full names {keys} instead.", FutureWarning, stacklevel=2)
+    return tuple((dictionary.get(key, dictionary.get(alt_key))
+                  for key, alt_key in zip(keys, keys_alt)))
+
 
 def facet_normal_2(mesh):
     r"""Compute the horizontal component of the unit outward normal vector
@@ -31,12 +63,43 @@ def div_2(q):
     return q[0].dx(0) + q[1].dx(1)
 
 
+def eigenvalues(a):
+    r"""Return a pair of symbolic expressions for the largest and smallest
+    eigenvalues of a 2D rank-2 tensor"""
+    tr_a = tr(a)
+    det_a = det(a)
+    # TODO: Fret about numerical stability
+    Δ = sqrt(tr_a**2 - 4 * det_a)
+    return ((tr_a + Δ) / 2, (tr_a - Δ) / 2)
+
+
 def diameter(mesh):
     r"""Compute the diameter of the mesh in the L-infinity metric"""
     X = mesh.coordinates.dat.data_ro
     xmin = mesh.comm.allreduce(np.min(X, axis=0), op=np.minimum)
     xmax = mesh.comm.allreduce(np.max(X, axis=0), op=np.maximum)
     return np.max(xmax - xmin)
+
+
+def compute_surface(**kwargs):
+    r"""Return the ice surface elevation consistent with a given
+    thickness and bathymetry
+
+    If the bathymetry beneath a tidewater glacier is too low, the ice
+    will go afloat. The surface elevation of a floating ice shelf is
+
+    .. math::
+       s = (1 - \rho_I / \rho_W)h,
+
+    provided everything is in hydrostatic balance.
+    """
+    # TODO: Remove the 'h' and 'b' arguments once these are deprecated.
+    h = kwargs.get('thickness', kwargs.get('h'))
+    b = kwargs.get('bed', kwargs.get('b'))
+
+    Q = h.ufl_function_space()
+    s_expr = firedrake.max_value(h + b, (1 - ρ_I / ρ_W) * h)
+    return firedrake.interpolate(s_expr, Q)
 
 
 def depth_average(q3d, weight=firedrake.Constant(1)):

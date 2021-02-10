@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2018 by Daniel Shapero <shapero@uw.edu>
+# Copyright (C) 2017-2021 by Daniel Shapero <shapero@uw.edu>
 #
 # This file is part of icepack.
 #
@@ -10,8 +10,6 @@
 # The full text of the license can be found in the file LICENSE in the
 # icepack source directory or at <http://www.gnu.org/licenses/>.
 
-from glob import glob
-from os.path import basename, splitext
 from setuptools import setup, find_packages
 
 setup(
@@ -22,10 +20,11 @@ setup(
     author='Daniel Shapero',
     url='https://github.com/icepack/icepack',
     packages=find_packages(exclude=['doc', 'test']),
+    package_data={'icepack': ['registry-nsidc.txt', 'registry-outlines.txt']},
     install_requires=['numpy', 'scipy', 'matplotlib', 'rasterio>=1.0.26',
-                      'geojson', 'shapely', 'pooch', 'pygmsh'],
+                      'netCDF4', 'geojson', 'shapely', 'pooch>=1.0.0',
+                      'pygmsh<=6.1.1', 'meshio>=3.3.1', 'MeshPy', 'tqdm'],
     extras_require = {
-        'doc': ['sphinx', 'sphinxcontrib-bibtex', 'sphinx_rtd_theme',
-                'ipykernel', 'nbconvert']
+        'doc': ['sphinx', 'ipykernel', 'nbconvert', 'nikola']
     }
 )

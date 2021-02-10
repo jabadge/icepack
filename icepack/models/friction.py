@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2019 by Daniel Shapero <shapero@uw.edu>
+# Copyright (C) 2017-2020 by Daniel Shapero <shapero@uw.edu>
 #
 # This file is part of icepack.
 #
@@ -10,55 +10,76 @@
 # The full text of the license can be found in the file LICENSE in the
 # icepack source directory or at <http://www.gnu.org/licenses/>.
 
+import warnings
 import firedrake
-from firedrake import inner, dx, ds, sqrt
+from firedrake import inner, sqrt
 from icepack.constants import weertman_sliding_law as m
-from icepack import utilities
+from icepack.utilities import facet_normal_2, diameter, get_kwargs_alt
 
 
-def tau(u, C):
+def friction_stress(u, C):
     r"""Compute the shear stress for a given sliding velocity"""
-    return -C * sqrt(inner(u, u))**(1/m - 1) * u
+    return -C * sqrt(inner(u, u))**(1 / m - 1) * u
 
 
-def bed_friction(u, C):
+def bed_friction(u=None, C=None, **kwargs):
     r"""Return the bed friction part of the ice stream action functional
 
     The frictional part of the ice stream action functional is
 
     .. math::
-       E(u) = -\frac{m}{m + 1}\int_\Omega\tau(u, C)\cdot u\hspace{2pt}dx
+       E(u) = -\frac{m}{m + 1}\int_\Omega\tau(u, C)\cdot u\; dx
 
     where :math:`\\tau(u, C)` is the basal shear stress
 
     .. math::
        \tau(u, C) = -C|u|^{1/m - 1}u
     """
-    return -m/(m + 1) * inner(tau(u, C), u) * dx
+    # NOTE: This mess is for backwards-compatibility, so users can still pass
+    # in the velocity, thickness, and fluidity as positional arguments if they
+    # are still using old code.
+    if (u is not None) or (C is not None):
+        warnings.warn("Abbreviated names (u, C) have been deprecated, use full"
+                      " names (velocity, friction) instead.", FutureWarning)
+
+    if u is None:
+        u = kwargs['velocity']
+    if C is None:
+        C = kwargs['friction']
+
+    τ = friction_stress(u, C)
+    return -m / (m + 1) * inner(τ, u)
 
 
-def side_friction(u, h, Cs=firedrake.Constant(0), side_wall_ids=()):
+def side_friction(**kwargs):
     r"""Return the side wall friction part of the action functional
 
     The component of the action functional due to friction along the side
     walls of the domain is
 
     .. math::
-       E(u) = -\frac{m}{m + 1}\int_\Gamma h\tau(u, C_s)\cdot u\hspace{2pt}ds
+       E(u) = -\frac{m}{m + 1}\int_\Gamma h\tau(u, C_s)\cdot u\; ds
 
     where :math:`\tau(u, C_s)` is the side wall shear stress, :math:`ds`
     is the element of surface area and :math:`\Gamma` are the side walls.
     Side wall friction is relevant for glaciers that flow through a fjord
     with rock walls on either side.
     """
+    u, h = get_kwargs_alt(kwargs, ('velocity', 'thickness'), ('u', 'h'))
+    Cs = kwargs.get('side_friction', kwargs.get('Cs', firedrake.Constant(0.)))
+
     mesh = u.ufl_domain()
-    ν = firedrake.FacetNormal(mesh)
+    if mesh.geometric_dimension() == 2:
+        ν = firedrake.FacetNormal(mesh)
+    else:
+        ν = facet_normal_2(mesh)
+
     u_t = u - inner(u, ν) * ν
-    ds_side_walls = ds(domain=mesh, subdomain_id=tuple(side_wall_ids))
-    return -m/(m + 1) * h * inner(tau(u_t, Cs), u_t) * ds_side_walls
+    τ = friction_stress(u_t, Cs)
+    return -m / (m + 1) * h * inner(τ, u_t)
 
 
-def normal_flow_penalty(u, scale=1.0, exponent=None, side_wall_ids=()):
+def normal_flow_penalty(**kwargs):
     r"""Return the penalty for flow normal to the domain boundary
 
     For problems where a glacier flows along some boundary, e.g. a fjord
@@ -66,11 +87,27 @@ def normal_flow_penalty(u, scale=1.0, exponent=None, side_wall_ids=()):
     enforce this boundary condition directly, we add a penalty for normal
     flow to the action functional.
     """
+    u, = get_kwargs_alt(kwargs, ('velocity',), ('u',))
+    scale = kwargs.get('scale', firedrake.Constant(1.))
+
     mesh = u.ufl_domain()
-    ν = firedrake.FacetNormal(mesh)
-    L = utilities.diameter(mesh)
-    δx = firedrake.CellSize(mesh)
-    d = u.ufl_function_space().ufl_element().degree()
-    exponent = d + 1 if exponent is None else exponent
+    if mesh.geometric_dimension() == 2:
+        ν = firedrake.FacetNormal(mesh)
+    elif mesh.geometric_dimension() == 3:
+        ν = facet_normal_2(mesh)
+
+    L = diameter(mesh)
+    δx = firedrake.FacetArea(mesh)
+
+    # Get the polynomial degree in the horizontal direction of the velocity
+    # field -- if extruded, the element degree is a tuple of the horizontal
+    # and vertical degrees.
+    degree = u.ufl_function_space().ufl_element().degree()
+    if isinstance(degree, tuple):
+        d = degree[0]
+    else:
+        d = degree
+    exponent = kwargs.get('exponent', d + 1)
+
     penalty = scale * (L / δx)**exponent
-    return 0.5 * penalty * inner(u, ν)**2 * ds(tuple(side_wall_ids))
+    return 0.5 * penalty * inner(u, ν)**2

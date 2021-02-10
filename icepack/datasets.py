@@ -1,4 +1,4 @@
-# Copyright (C) 2019 by Daniel Shapero <shapero@uw.edu>
+# Copyright (C) 2019-2021 by Daniel Shapero <shapero@uw.edu>
 #
 # This file is part of icepack.
 #
@@ -14,78 +14,135 @@ r"""Routines for fetching the glaciological data sets used in the demos"""
 
 import os
 from getpass import getpass
+import pkg_resources
 import requests
 import pooch
 
-def _earthdata_downloader(url, output_file, dataset):
-    username = os.environ.get('EARTHDATA_USERNAME')
-    if username is None:
-        username = input('EarthData username: ')
 
-    password = os.environ.get('EARTHDATA_PASSWORD')
-    if password is None:
-        password = getpass('EarthData password: ')
-
-    login = requests.get(url)
-    downloader = pooch.HTTPDownloader(auth=(username, password))
-    downloader(login.url, output_file, dataset)
+pooch.get_logger().setLevel('WARNING')
 
 
-nsidc_url = 'https://daacdata.apps.nsidc.org/pub/DATASETS/'
+class EarthDataDownloader:
+    def __init__(self):
+        self._username = None
+        self._password = None
 
-measures_antarctica = pooch.create(
+    def _get_credentials(self):
+        if self._username is None:
+            username_env = os.environ.get('EARTHDATA_USERNAME')
+            if username_env is None:
+                self._username = input('EarthData username: ')
+            else:
+                self._username = username_env
+
+        if self._password is None:
+            password_env = os.environ.get('EARTHDATA_PASSWORD')
+            if password_env is None:
+                self._password = getpass('EarthData password: ')
+            else:
+                self._password = password_env
+
+        return self._username, self._password
+
+    def __call__(self, url, output_file, dataset):
+        auth = self._get_credentials()
+        downloader = pooch.HTTPDownloader(auth=auth, progressbar=True)
+        try:
+            login = requests.get(url)
+            downloader(login.url, output_file, dataset)
+        except requests.exceptions.HTTPError as error:
+            if 'Unauthorized' in str(error):
+                pooch.get_logger().error('Wrong username/password!')
+                self._username = None
+                self._password = None
+            raise error
+
+
+_earthdata_downloader = EarthDataDownloader()
+
+
+nsidc_data = pooch.create(
     path=pooch.os_cache('icepack'),
-    base_url=nsidc_url + 'nsidc0754_MEASURES_antarctic_ice_vel_phase_map_v01/',
-    registry={
-        'antarctic_ice_vel_phase_map_v01.nc':
-        'fa0957618b8bd98099f4a419d7dc0e3a2c562d89e9791b4d0ed55e6017f52416'
-    }
+    base_url='',
+    registry=None
 )
+
+registry_nsidc = pkg_resources.resource_stream('icepack', 'registry-nsidc.txt')
+nsidc_data.load_registry(registry_nsidc)
+
 
 def fetch_measures_antarctica():
-    return measures_antarctica.fetch('antarctic_ice_vel_phase_map_v01.nc',
-                                     downloader=_earthdata_downloader)
+    r"""Fetch the MEaSUREs Antarctic velocity map"""
+    return nsidc_data.fetch(
+        'antarctic_ice_vel_phase_map_v01.nc', downloader=_earthdata_downloader
+    )
 
 
-bedmap2 = pooch.create(
-    path=pooch.os_cache('icepack'),
-    base_url='https://secure.antarctica.ac.uk/data/bedmap2/',
-    registry={
-        'bedmap2_tiff.zip':
-        'f4bb27ce05197e9d29e4249d64a947b93aab264c3b4e6cbf49d6b339fb6c67fe'
-    }
-)
+def fetch_measures_greenland():
+    r"""Fetch the MEaSUREs Greenland velocity map"""
+    return [
+        nsidc_data.fetch(
+            'greenland_vel_mosaic200_2015_2016_{}_v02.1.tif'.format(field_name),
+            downloader=_earthdata_downloader
+        )
+        for field_name in ['vx', 'vy', 'ex', 'ey']
+    ]
 
-def fetch_bedmap2():
-    filenames = bedmap2.fetch('bedmap2_tiff.zip', processor=pooch.Unzip())
-    return [f for f in filenames if os.path.splitext(f)[1] == '.tif']
+
+def fetch_bedmachine_antarctica():
+    r"""Fetch the BedMachine map of Antarctic ice thickness, surface elevation,
+    and bed elevation"""
+    return nsidc_data.fetch(
+        'BedMachineAntarctica_2020-07-15_v02.nc',
+        downloader=_earthdata_downloader
+    )
 
 
 outlines_url = 'https://raw.githubusercontent.com/icepack/glacier-meshes/'
-outlines_commit = '9306972327a127c4c4bdd3b5f61d2102307c2baa'
-larsen_outline = pooch.create(
+outlines_commit = 'c98a8b7536b1891611566257d944e5ea024f2cdf'
+outlines = pooch.create(
     path=pooch.os_cache('icepack'),
     base_url=outlines_url + outlines_commit + '/glaciers/',
-    registry={
-        'larsen.geojson':
-        '74a632fcb7832df1c2f2d8c04302cfcdb3c1e86e027b8de5ba10e98d14d94856'
-    }
+    registry=None
 )
+
+registry_outlines = pkg_resources.resource_stream(
+    'icepack', 'registry-outlines.txt'
+)
+outlines.load_registry(registry_outlines)
+
+
+def get_glacier_names():
+    r"""Return the names of the glaciers for which we have outlines that you
+    can fetch"""
+    return [
+        os.path.splitext(os.path.basename(filename))[0]
+        for filename in outlines.registry.keys()
+    ]
+
+
+def fetch_outline(name):
+    r"""Fetch the outline of a glacier as a GeoJSON file"""
+    names = get_glacier_names()
+    if name not in names:
+        raise ValueError("Glacier name '%s' not in %s" % (name, names))
+    downloader = pooch.HTTPDownloader(progressbar=True)
+    return outlines.fetch(name + '.geojson', downloader=downloader)
+
 
 def fetch_larsen_outline():
-    return larsen_outline.fetch('larsen.geojson')
+    r"""Fetch an outline of the Larsen C Ice Shelf"""
+    warnings.warn(
+        "This function is deprecated, use `fetch_outline('larsen')`",
+        FutureWarning
+    )
+    return fetch_outline('larsen')
 
-
-moa = pooch.create(
-    path=pooch.os_cache('icepack'),
-    base_url=nsidc_url + 'nsidc0593_moa2009/geotiff/',
-    registry={
-        'moa750_2009_hp1_v01.1.tif.gz':
-        '90d1718ea0971795ec102482c47f308ba08ba2b88383facb9fe210877e80282c'
-    }
-)
 
 def fetch_mosaic_of_antarctica():
-    return moa.fetch('moa750_2009_hp1_v01.1.tif.gz',
-                     downloader=_earthdata_downloader,
-                     processor=pooch.Decompress())
+    r"""Fetch the MODIS optical image mosaic of Antarctica"""
+    return nsidc_data.fetch(
+        'moa750_2009_hp1_v01.1.tif.gz',
+        downloader=_earthdata_downloader,
+        processor=pooch.Decompress()
+    )

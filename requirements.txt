@@ -4,8 +4,10 @@ matplotlib
 rasterio>=1.0.26
 geojson
 shapely
-pooch
-pygmsh
+pooch>=1.0.0
+pygmsh<=6.1.1
+meshio>=3.3.1
+MeshPy
 sphinx[doc]
 sphinxcontrib-bibtex[doc]
 sphinx_rtd_theme[doc]

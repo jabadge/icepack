@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2019 by Daniel Shapero <shapero@uw.edu>
+# Copyright (C) 2017-2020 by Daniel Shapero <shapero@uw.edu>
 #
 # This file is part of icepack.
 #
@@ -16,18 +16,18 @@ from icepack.constants import (ice_density as ρ_I, water_density as ρ_W,
                                gravity as g)
 from icepack.models.viscosity import viscosity_depth_averaged as viscosity
 from icepack.models.friction import side_friction, normal_flow_penalty
-from icepack.models.mass_transport import LaxWendroff
-from icepack.optimization import newton_search
-from icepack.utilities import add_kwarg_wrapper
+from icepack.models.mass_transport import Continuity
+from icepack.optimization import MinimizationProblem, NewtonSolver
+from icepack.utilities import add_kwarg_wrapper, get_kwargs_alt
 
 
-def gravity(u, h):
+def gravity(**kwargs):
     r"""Return the gravitational part of the ice shelf action functional
 
     The gravitational part of the ice shelf action functional is
 
     .. math::
-        E(u) = -\frac{1}{2}\int_\Omega\varrho g\nabla h^2\cdot u\hspace{2pt}dx
+        E(u) = -\frac{1}{2}\int_\Omega\varrho g\nabla h^2\cdot u\; dx
 
     Parameters
     ----------
@@ -40,29 +40,32 @@ def gravity(u, h):
     -------
     firedrake.Form
     """
+    u, h = get_kwargs_alt(kwargs, ('velocity', 'thickness'), ('u', 'h'))
+
     ρ = ρ_I * (1 - ρ_I / ρ_W)
-    return -0.5 * ρ * g * inner(grad(h**2), u) * dx
+    return -0.5 * ρ * g * inner(grad(h**2), u)
 
 
-def terminus(u, h, ice_front_ids=()):
+def terminus(**kwargs):
     r"""Return the terminus stress part of the ice shelf action functional
 
     The power exerted due to stress at the calving terminus :math:`\Gamma` is
 
     .. math::
-       E(u) = \int_\Gamma\varrho gh^2u\cdot\nu\hspace{2pt}ds
+       E(u) = \int_\Gamma\varrho gh^2u\cdot\nu\; ds
 
     We assume that sea level is at :math:`z = 0` for calculating the water
     depth.
     """
+    u, h = get_kwargs_alt(kwargs, ('velocity', 'thickness'), ('u', 'h'))
+
     mesh = u.ufl_domain()
     ν = firedrake.FacetNormal(mesh)
-    IDs = tuple(ice_front_ids)
     ρ = ρ_I * (1 - ρ_I / ρ_W)
-    return 0.5 * ρ * g * h**2 * inner(u, ν) * ds(IDs)
+    return 0.5 * ρ * g * h**2 * inner(u, ν)
 
 
-class IceShelf(object):
+class IceShelf:
     r"""Class for modelling the flow of floating ice shelves
 
     This class provides functions that solve for the velocity and
@@ -75,15 +78,15 @@ class IceShelf(object):
     """
     def __init__(self, viscosity=viscosity, gravity=gravity, terminus=terminus,
                  side_friction=side_friction, penalty=normal_flow_penalty,
-                 mass_transport=LaxWendroff()):
-        self.mass_transport = mass_transport
+                 continuity=Continuity(dimension=2)):
         self.viscosity = add_kwarg_wrapper(viscosity)
         self.side_friction = add_kwarg_wrapper(side_friction)
         self.penalty = add_kwarg_wrapper(penalty)
         self.gravity = add_kwarg_wrapper(gravity)
         self.terminus = add_kwarg_wrapper(terminus)
+        self.continuity = continuity
 
-    def action(self, u, h, **kwargs):
+    def action(self, **kwargs):
         r"""Return the action functional that gives the ice shelf diagnostic
         model as the Euler-Lagrange equations
 
@@ -116,22 +119,32 @@ class IceShelf(object):
             and gravity functionals. The ice fluidity coefficient, for
             example, is passed as a keyword argument.
         """
-        viscosity = self.viscosity(u=u, h=h, **kwargs)
-        side_friction = self.side_friction(u=u, h=h, **kwargs)
-        gravity = self.gravity(u=u, h=h, **kwargs)
-        terminus = self.terminus(u=u, h=h, **kwargs)
-        penalty = self.penalty(u=u, h=h, **kwargs)
+        u = kwargs.get('velocity', kwargs.get('u'))
+        mesh = u.ufl_domain()
+        ice_front_ids = tuple(kwargs.pop('ice_front_ids', ()))
+        side_wall_ids = tuple(kwargs.pop('side_wall_ids', ()))
+
+        viscosity = self.viscosity(**kwargs) * dx
+        gravity = self.gravity(**kwargs) * dx
+
+        ds_w = ds(domain=mesh, subdomain_id=side_wall_ids)
+        side_friction = self.side_friction(**kwargs) * ds_w
+        penalty = self.penalty(**kwargs) * ds_w
+
+        ds_t = ds(domain=mesh, subdomain_id=ice_front_ids)
+        terminus = self.terminus(**kwargs) * ds_t
+
         return viscosity + side_friction - gravity - terminus + penalty
 
-    def scale(self, u, h, **kwargs):
+    def scale(self, **kwargs):
         r"""Return the positive, convex part of the action functional
 
         The positive part of the action functional is used as a dimensional
         scale to determine when to terminate an optimization algorithm.
         """
-        return self.viscosity(u=u, h=h, **kwargs)
+        return self.viscosity(**kwargs) * dx
 
-    def quadrature_degree(self, u, h, **kwargs):
+    def quadrature_degree(self, **kwargs):
         r"""Return the quadrature degree necessary to integrate the action
         functional accurately
 
@@ -140,58 +153,9 @@ class IceShelf(object):
         expression. By exploiting known structure of the problem, we can
         reduce the number of quadrature points while preserving accuracy.
         """
+        u = kwargs.get('velocity', kwargs.get('u'))
+        h = kwargs.get('thickness', kwargs.get('h'))
+
         degree_u = u.ufl_element().degree()
         degree_h = h.ufl_element().degree()
         return 3 * (degree_u - 1) + 2 * degree_h
-
-    def diagnostic_solve(self, u0, h, dirichlet_ids, tol=1e-6, **kwargs):
-        r"""Solve for the ice velocity from the thickness
-
-        Parameters
-        ----------
-        u0 : firedrake.Function
-            Initial guess for the ice velocity; the Dirichlet boundaries
-            are taken from `u0`
-        h : firedrake.Function
-            Ice thickness
-        dirichlet_ids : list of int
-            list of integer IDs denoting the parts of the boundary where
-            Dirichlet conditions should be applied
-        tol : float
-            dimensionless tolerance for when to terminate Newton's method
-
-        Returns
-        -------
-        u : firedrake.Function
-            Ice velocity
-
-        Other parameters
-        ----------------
-        **kwargs
-            All other keyword arguments will be passed on to the
-            `viscosity` and `gravity` functions that were set when this
-            model object was initialized
-        """
-        u = u0.copy(deepcopy=True)
-
-        boundary_ids = u.ufl_domain().exterior_facets.unique_markers
-        side_wall_ids = kwargs.get('side_wall_ids', [])
-        kwargs['side_wall_ids'] = side_wall_ids
-        kwargs['ice_front_ids'] = list(
-            set(boundary_ids) - set(dirichlet_ids) - set(side_wall_ids))
-        bcs = firedrake.DirichletBC(
-            u.function_space(), firedrake.as_vector((0, 0)), dirichlet_ids)
-        params = {'quadrature_degree': self.quadrature_degree(u, h, **kwargs)}
-
-        # Solve the nonlinear optimization problem
-        action = self.action(u=u, h=h, **kwargs)
-        scale = self.scale(u=u, h=h, **kwargs)
-        return newton_search(action, u, bcs, tol, scale,
-                             form_compiler_parameters=params)
-
-    def prognostic_solve(self, dt, h0, a, u, h_inflow=None):
-        r"""Propagate the ice thickness forward one timestep
-
-        See :meth:`icepack.models.mass_transport.MassTransport.solve`
-        """
-        return self.mass_transport.solve(dt, h0=h0, a=a, u=u, h_inflow=h_inflow)

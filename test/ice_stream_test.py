@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2019 by Daniel Shapero <shapero@uw.edu>
+# Copyright (C) 2017-2020 by Daniel Shapero <shapero@uw.edu>
 #
 # This file is part of icepack.
 #
@@ -64,11 +64,12 @@ def test_manufactured_solution():
 
     T = 254.15
     rheology = icepack.rate_factor(T)**(-1/constants.glen_flow_law)
-    values = {u0: 100, dh: 100, h0: 500, L: 20e3, hf: 10, B: rheology,
-              ρ_I: constants.ice_density, ρ_W: constants.water_density,
-              n: constants.glen_flow_law, m: constants.weertman_sliding_law,
-              g: constants.gravity}
-
+    values = {
+        u0: 100, dh: 100, h0: 500, L: 20e3, hf: 10, B: rheology,
+        ρ_I: constants.ice_density, ρ_W: constants.water_density,
+        n: constants.glen_flow_law, m: constants.weertman_sliding_law,
+        g: constants.gravity
+    }
 
     τ_b = lambdify(x, friction(x, u, C).subs(values), 'numpy')
     τ_d = lambdify(x, driving_stress(x, h, s).subs(values), 'numpy')
@@ -85,10 +86,14 @@ def test_manufactured_solution():
 # Now test our numerical solvers against this analytical solution.
 import firedrake
 from firedrake import interpolate, as_vector
-import icepack, icepack.models
-from icepack.constants import (ice_density as ρ_I, water_density as ρ_W,
-                               glen_flow_law as n, weertman_sliding_law as m,
-                               gravity as g)
+import icepack
+from icepack.constants import (
+    ice_density as ρ_I,
+    water_density as ρ_W,
+    glen_flow_law as n,
+    weertman_sliding_law as m,
+    gravity as g
+)
 
 Lx, Ly = 20e3, 20e3
 h0, dh = 500.0, 100.0
@@ -140,8 +145,8 @@ def norm(v):
 
 
 def test_diagnostic_solver_convergence():
-    ice_stream = icepack.models.IceStream()
-    opts = {'dirichlet_ids': [1], 'side_wall_ids': [3, 4], 'tol': 1e-12}
+    model = icepack.models.IceStream()
+    opts = {'dirichlet_ids': [1], 'side_wall_ids': [3, 4]}
 
     for degree in range(1, 4):
         delta_x, error = [], []
@@ -160,8 +165,14 @@ def test_diagnostic_solver_convergence():
             C = interpolate(friction(x), Q)
             A = interpolate(firedrake.Constant(icepack.rate_factor(T)), Q)
 
-            u = ice_stream.diagnostic_solve(h=h, s=s, A=A, C=C, u0=u_guess,
-                                            **opts)
+            solver = icepack.solvers.FlowSolver(model, **opts)
+            u = solver.diagnostic_solve(
+                velocity=u_guess,
+                thickness=h,
+                surface=s,
+                fluidity=A,
+                friction=C
+            )
             error.append(norm(u_exact - u) / norm(u_exact))
             delta_x.append(Lx / N)
 
@@ -186,7 +197,6 @@ def test_computing_surface():
     b0 = ρ_I / ρ_W * (dh / 2 - h0)
     b = interpolate(firedrake.Constant(b0), Q)
 
-    ice_stream = icepack.models.IceStream()
-    s = ice_stream.compute_surface(h=h, b=b)
+    s = icepack.compute_surface(h=h, b=b)
     x0, y0 = Lx/2, Ly/2
     assert abs(s((x0, y0)) - (1 - ρ_I / ρ_W) * h((x0, y0))) < 1e-8

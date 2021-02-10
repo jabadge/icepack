@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2019 by Daniel Shapero <shapero@uw.edu>
+# Copyright (C) 2017-2020 by Daniel Shapero <shapero@uw.edu>
 #
 # This file is part of icepack.
 #
@@ -17,9 +17,10 @@ and, in particular, the viscous part of the action functional for ice flow.
 Several flow models all have essentially the same viscous part.
 """
 
+import warnings
 import numpy as np
 import firedrake
-from firedrake import grad, dx, sqrt, Identity, inner, sym, tr as trace
+from firedrake import grad, sqrt, Identity, inner, sym, tr as trace
 from icepack.constants import year, ideal_gas as R, glen_flow_law as n
 
 transition_temperature = 263.15      # K
@@ -62,7 +63,11 @@ def rate_factor(T):
         cold = firedrake.lt(T, transition_temperature)
         A0 = firedrake.conditional(cold, A0_cold, A0_warm)
         Q = firedrake.conditional(cold, Q_cold, Q_warm)
-        return A0 * firedrake.exp(-Q / (R * T))
+        A = A0 * firedrake.exp(-Q / (R * T))
+        if isinstance(T, firedrake.Constant):
+            return firedrake.Constant(A)
+
+        return A
 
     cold = T < transition_temperature
     warm = ~cold if isinstance(T, np.ndarray) else (not cold)
@@ -72,29 +77,24 @@ def rate_factor(T):
     return A0 * np.exp(-Q / (R * T))
 
 
-def M(ε, A):
+def membrane_stress(ε, A):
     r"""Calculate the membrane stress for a given strain rate and
     fluidity"""
     I = Identity(2)
     tr_ε = trace(ε)
     ε_e = sqrt((inner(ε, ε) + tr_ε**2) / 2)
-    μ = 0.5 * A**(-1/n) * ε_e**(1/n - 1)
+    μ = 0.5 * A**(-1 / n) * ε_e**(1 / n - 1)
     return 2 * μ * (ε + tr_ε * I)
 
 
-def ε(u):
-    r"""Calculate the strain rate for a given flow velocity"""
-    return sym(grad(u))
-
-
-def viscosity_depth_averaged(u, h, A):
+def viscosity_depth_averaged(u=None, h=None, A=None, **kwargs):
     r"""Return the viscous part of the action for depth-averaged models
 
     The viscous component of the action for depth-averaged ice flow is
 
     .. math::
         E(u) = \frac{n}{n+1}\int_\Omega h\cdot
-        M(\dot\varepsilon, A):\dot\varepsilon\hspace{2pt} dx
+        M(\dot\varepsilon, A):\dot\varepsilon\; dx
 
     where :math:`M(\dot\varepsilon, A)` is the membrane stress tensor
 
@@ -110,15 +110,29 @@ def viscosity_depth_averaged(u, h, A):
 
     Parameters
     ----------
-    u : firedrake.Function
-        ice velocity
-    h : firedrake.Function
-        ice thickness
-    A : firedrake.Function
-        ice fluidity parameter
+    velocity : firedrake.Function
+    thickness : firedrake.Function
+    fluidity : firedrake.Function
 
     Returns
     -------
     firedrake.Form
     """
-    return n/(n + 1) * h * inner(M(ε(u), A), ε(u)) * dx
+    # NOTE: This mess is for backwards-compatibility, so users can still pass
+    # in the velocity, thickness, and fluidity as positional arguments if they
+    # are still using old code.
+    if (u is not None) or (h is not None) or (A is not None):
+        warnings.warn("Abbreviated names (u, h, A) have been deprecated, use "
+                      "full names (velocity, thickness, fluidity) instead.",
+                      FutureWarning)
+
+    if u is None:
+        u = kwargs['velocity']
+    if h is None:
+        h = kwargs['thickness']
+    if A is None:
+        A = kwargs['fluidity']
+
+    ε = sym(grad(u))
+    M = membrane_stress(ε, A)
+    return n / (n + 1) * h * inner(M, ε)
