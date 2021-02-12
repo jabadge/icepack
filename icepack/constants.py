@@ -30,8 +30,11 @@ gravity = 9.81 * year**2
 #: density of ice
 ice_density = 917 / year**2 * 1.0e-6
 
+#: density of water
+water_density = 1000 / year**2 * 1.0e-6
+
 #: density of seawater
-water_density = 1024 / year**2 * 1.0e-6
+sea_water_density = 1024 / year**2 * 1.0e-6
 
 #: ideal gas constant (kJ / mol K)
 ideal_gas = 8.3144621e-3
@@ -43,13 +46,31 @@ glen_flow_law = 3.0
 weertman_sliding_law = 3.0
 
 #: specific heat capacity of ice at -10C (m^2 / yr^2 / K)
-heat_capacity = 2.0e3 * year**2
+heat_capacity = 2.009e3 * year**2
 
 #: thermal diffusivity of ice at -10C (m^2 / yr)
 thermal_diffusivity = 2.3e-3 / (917 * 2.0) * year
 
-#: melting point of ice at atmospheric pressure (K)
+#: triple point of ice at atmospheric pressure (K)
 melting_temperature = 273.15
 
 #: latent heat of melting of ice (m^2 / yr^2)
 latent_heat = 334e3 * year**2
+
+#: activation energy for grain growth
+act_grain_growth = 42.4e3
+
+#: activation energy for water in ice
+act_water_ice = 60e3
+
+#: Clausius-Claperyon
+clausius_clapeyron = 7.9e-8 * 1.0e-6
+
+#: creep coefficient high
+creep_coefficient_high = 3.7e-9 * year / 1.0e-6
+
+#: creep coefficient low
+creep_coefficient_low = 1.3e-7 * year / 1.0e-6
+
+#: grain growth coefficient
+grain_growth_coefficient = 1.3e-7 / year 
