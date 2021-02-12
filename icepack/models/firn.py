@@ -41,9 +41,12 @@ from icepack.utilities import (
     get_kwargs_alt
 )
 
+### TODO: Make this dependent on gradient/search and find the z-dimension of interval mesh.
+
 
 def HarronLangway(ρ_crit=550/ year**2 * 1.0e-6, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5,**kwargs):
     r""" Harron-Langway densification model
+    Need to understand the units of k1 and k2 and make sure these are consistent with the model units.
     """
     keys = ('density', 'accumulation', 'temperature')
     keys_alt = ('ρ', 'a', 'T')
@@ -60,6 +63,7 @@ class FirnModel:
     This class solves for the firn density and vertical velocity (additional 
     energy density solutions are also in the developmental scope of the model).
     This will allow a thermodynamically consistent derivation of the firn density.
+    Alternative models for the densification rate can be supplied via dρdt.
     """
 
     def __init__(self, dρdt=HarronLangway):
@@ -121,8 +125,6 @@ class FirnModel:
     def velocity_gradient_flux(self, **kwargs):
         r"""Return the velocity gradient part of the 
         veloctiy residual
-
-
 
         Parameters
         ----------
