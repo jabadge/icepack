@@ -16,7 +16,9 @@ import firedrake
 from firedrake import dx, inner, Constant
 from icepack.optimization import MinimizationProblem, NewtonSolver
 from ..utilities import default_solver_parameters
-
+from icepack.constants import (
+    ice_density as ρ_I,
+    year as year)
 
 
 class FirnSolver:    
@@ -114,17 +116,18 @@ class FirnSolver:
         w = self.fields.get('firn_velocity', self.fields.get('w_f'))
         h_f = self.fields.get('firn_thickness',self.fields.get('h_f'))
         ρ_s = self.fields.get('surface_density', self.fields.get('ρ_s'))
-        w_s = -self.fields.get('accumulation', self.fields.get('a'))*ρ_s
+        a = self.fields.get('accumulation', self.fields.get('a'))
+        
         ρ_0 = ρ.copy(deepcopy=True)
         w_0 = w.copy(deepcopy=True)
         
         ϕ = firedrake.TestFunction(ρ.function_space())
         
-        F = (ρ - ρ_0)/dt * ϕ * h_f * dx - dt * dρ_dt
+        F = (ρ - ρ_0) * ϕ * h_f * dx - dt * dρ_dt
         G = wflux + ρvel
 
         self._ρbcs = firedrake.DirichletBC(ρ.function_space().sub(0), ρ_s,'top')
-        self._wbcs = firedrake.DirichletBC(w.function_space().sub(0), w_s,'top')
+        self._wbcs = firedrake.DirichletBC(w.function_space().sub(0), -a * ρ_I * year**2 / 1.0e-6 /ρ_s,'top')
 
         degree = ρ.ufl_element().degree()
         fc_params = {'quadrature_degree': (3 * degree[0], 2 * degree[1])}

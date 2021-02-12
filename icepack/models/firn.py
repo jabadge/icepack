@@ -44,16 +44,16 @@ from icepack.utilities import (
 ### TODO: Make this dependent on gradient/search and find the z-dimension of interval mesh.
 
 
-def HarronLangway(ρ_crit=550/ year**2 * 1.0e-6, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5,**kwargs):
+def HarronLangway(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5,**kwargs):
     r""" Harron-Langway densification model
-    Need to understand the units of k1 and k2 and make sure these are consistent with the model units.
+    Need to understand the units of k1 and k2 and make sure
+    these are consistent with the model units.
     """
     keys = ('density', 'accumulation', 'temperature')
     keys_alt = ('ρ', 'a', 'T')
     ρ, a, T = get_kwargs_alt(kwargs, keys, keys_alt)
-    c = firedrake.conditional(ρ<=ρ_crit,k1*exp(-Q1/(R*T))*a**aHL,k2*exp(-Q2/(R*T))*a**bHL)
-    dρdt = c*(ρ_I-ρ)
-    
+    c = firedrake.conditional(ρ<ρ_crit,k1*exp(-Q1/(R*T))*(a*ρ_I/ρ_W)**aHL,k2*exp(-Q2/(R*T))*(a*ρ_I/ρ_W)**bHL)
+    dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
     return dρdt
 
 
@@ -115,7 +115,7 @@ class FirnModel:
         keys = ('firn_thickness', 'density', 'temperature', 'accumulation')
         keys_alt = ('h_f','ρ','T_f','a')
         h_f, ρ, T, a = get_kwargs_alt(kwargs, keys, keys_alt)
-        dρdt = self.dρdt(**kwargs)
+        dρdt = self.dρdt(ρ, a, T, **kwargs)
             
         Q = ρ.function_space()
         ϕ = firedrake.TestFunction(Q)
@@ -164,8 +164,8 @@ class FirnModel:
 
         keys = ('firn_thickness','firn_velocity','density','firn_temperature','accumulation')
         keys_alt = ('h_f','w_f','ρ','T_f','a')
-        h_f, w, ρ ,T,a = get_kwargs_alt(kwargs, keys, keys_alt)
-        dρdt = self.dρdt(**kwargs)
+        h_f, w, ρ, T, a = get_kwargs_alt(kwargs, keys, keys_alt)
+        dρdt = self.dρdt(ρ, a, T, **kwargs)
             
         Q = w.function_space()
         η = firedrake.TestFunction(Q)
