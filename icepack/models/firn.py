@@ -14,7 +14,7 @@ import functools
 import sympy
 import firedrake
 from firedrake import (
-    grad, exp, inner, outer, sym, Identity, tr as trace, sqrt, dx, ds_b, ds_v
+    max_value, grad, exp, log, inner, outer, sym, Identity, tr as trace, sqrt, dx, ds_b, ds_v
 )
 
 from icepack.models.mass_transport import Continuity
@@ -31,6 +31,7 @@ from icepack.constants import (
     creep_coefficient_low as kcLw,
     grain_growth_coefficient as kg,
     heat_capacity as cpi,
+    melting_temperature as mt,
     year as year
 )
 from icepack.utilities import (
@@ -44,17 +45,159 @@ from icepack.utilities import (
 ### TODO: Make this dependent on gradient/search and find the z-dimension of interval mesh.
 
 
-def HarronLangway(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5,**kwargs):
-    r""" Harron-Langway densification model
+def density2stress(ρ):
+    # We need a density to stress function of some kind.
+    return None
+
+
+def HerronLangway(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5,**kwargs):
+    r""" Herron-Langway densification model
     Need to understand the units of k1 and k2 and make sure
     these are consistent with the model units.
     """
-    keys = ('density', 'accumulation', 'temperature')
-    keys_alt = ('ρ', 'a', 'T')
-    ρ, a, T = get_kwargs_alt(kwargs, keys, keys_alt)
     c = firedrake.conditional(ρ<ρ_crit,k1*exp(-Q1/(R*T))*(a*ρ_I/ρ_W)**aHL,k2*exp(-Q2/(R*T))*(a*ρ_I/ρ_W)**bHL)
     dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
     return dρdt
+
+
+def HL_Sigfus(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5, **kwargs):
+    r""" Sigfus implementation of the Herron-Langway 
+    """
+
+    σ=density2stress(ρ)
+    dρ=(ρ_I * year**2 / 1.0e-6 - ρ) / 1000.0
+    dσ=σ-σ_crit
+    ksig=k2 * exp(-Q2/(R*T))**2
+    c=firedrake.conditional(ρ<ρ_crit,k1*exp(-Q1/(R*T))*(a*ρ_I/ρ_W)**aHL,ksig*dσ/(g*log((ρ_I/ρ_W -ρ_crit/ρ_W))))
+    dρdt=firedrake.condition(ρ< _I* year**2 / 1.0e-6,c*((ρ_I * year**2 / 1.0e-6)-ρ),0.0)
+
+    return dρdt
+
+
+def Arthern_2010T(ρ, a, T, r, ρ_crit=550.0, kc1=9.2e-9, kc2=3.7e-9,**kwargs):
+    r""" Arthern's tarnsient model described in the
+    appendix of Arthern et al. 2010. Uses stress
+    rather than accumulation rate.
+    """
+    σ=density2stress(ρ)
+
+    c=firedrake.conditional(ρ<ρ_crit,kc1*exp(-Ec/(R*T))*σ/r,kc2*exp(-Ec/(R*T))*σ/r)
+    dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
+    return dρdt
+
+def Helsen_2008(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5, **kwargs):
+    r""" Helsen 2008 implementation of equation
+    from Arthern et al. 2010.
+    """
+
+    Tavg = utilities.lift3d(utilities.depth_average(T))
+    c=a*ρ_I/ρ_W * ( 76.138 - 0.28965 * Tavg * 8.36 * (mt - T)**-2.061) 
+    dρdt=c*((ρ_I * year**2 / 1.0e-6) - ρ)
+
+    return dρdt
+
+def Li_2004(ρ, a, T, **kwargs):
+    r""" Accumulation units are m W.E. per year
+    Equation is published in Artherm 2010
+    requires vapor flux to be implemented properly.
+    """
+
+    Tavg = utilities.lift3d(utilities.depth_average(T))
+    c = a*ρ_I/ρ_W*(139.21-0.542*Tavg)*8.36*(mt-T)**-2.061
+    dρdt=c*((ρ_I * year**2 / 1.0e-6) - ρ)
+    
+    return dρdt
+
+def Li_2011(ρ, a, T, **kwargs):
+    r""" 
+    """
+
+    Tavg = utilities.lift3d(utilities.depth_average(T))
+    β1 = -9.788 + 8.996*a*ρ_I/ρ_W - 0.6165*(Tavg-mt)
+    β2 = β1/(-2.0178 + 8.4043*a*ρ_I/ρ_W - 0.0932*(Tavg-mt))
+    c = firedrake.conditional(ρ<ρ_crit,a**ρ_I/ρ_W*β1*8.36*(mt-T)**-2.061,a**ρ_I/ρ_W*β2*8.36*(mt-T)**-2.061)
+    dρdt=c*((ρ_I * year**2 / 1.0e-6) - ρ)
+    
+    return dρdt
+
+def Li_2015(ρ, a, T, **kwargs):
+    r"""
+    """
+    Tavg = utilities.lift3d(utilities.depth_average(T))
+    β1 = -1.218 - 0.403*(Tavg-mt)
+    β2 = β1*(0.792-1.080*a*ρ_I/ρ_W + 0.00465*(Tavg-mt))
+    c = firedrake.conditional(ρ<ρ_crit,a*ρ_I/ρ_W*β1*8.36*(mt-T)**-2.061,a*ρ_I/ρ_W*β2*8.36*(mt-T)**-2.061)
+    dρdt=c*((ρ_I * year**2 / 1.0e-6) - ρ)
+    
+    return dρdt
+
+def Simonsen_2013(ρ, a, T, ρ_crit=550.0, ar1=0.07, ar2=0.03, F0=0.8, F1=1.25, **kwargs):
+    r""" Simonsen 2013 paper
+    """
+
+    Tavg = utilities.lift3d(utilities.depth_average(T))
+    gamma=61.7/((a*ρ_I/ρ_W)**.5)*exp(-3800/(R*Tavg))
+    c = firedrake.conditional(ρ<ρ_crit,F0*ar1*a*ρ_I/ρ_W*g*exp(-Ec/(R*T)+Eg/(R*Tavg)),F1*ar2*a*ρ_I/ρ_W*g*exp(-Ec/(R*T)+Eg/(R*Tavg)))
+    dρdt=c*((ρ_I * year**2 / 1.0e-6) - ρ)
+
+    return dρdt
+
+
+def Ligtenberg_2011(ρ, a, T, ρ_crit=550.0, ar1=0.07, ar2=0.03, **kwargs):
+    r""" Ligtenberg densification model
+    """
+
+    m0 = max_value(1.435 - 0.151 * log(a*(ρ_I * year**2 / 1.0e-6)),firedrake.Constant(.25))
+    m1 = max_value(2.366 - 0.293 * log(a*(ρ_I * year**2 / 1.0e-6)),firedrake.Constant(.25))
+    Tavg = utilities.lift3d(utilities.depth_average(T))
+    c = firedrake.conditional(ρ<ρ_crit,m0*ar1*a*(ρ_I * year**2 / 1.0e-6)*g*exp(-Ec/(R*T) + Eg/(R*Tavg)),m1*ar2*a*(ρ_I * year**2 / 1.0e-6)*g*exp(-Ec/(R*T) + Eg/(R*Tavg)))
+    dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
+    
+    return dρdt
+
+
+def Barnola_1991(ρ, a, T, ρ_crit=550.0, Q1=10160.0, k1=11.0,
+    aHL=1.0, α=-37.455, β=99.743, δ=-95.027,γ=30.673, A0b=2.54e4,
+    n=3.0, Q=60.0e3, close_off=800.0, **kwargs):
+    # Annika, this is another one where I need help understanding what Max is doing
+    #/ also what whether this is even a model worth including!
+
+    dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
+
+    return None
+
+
+def Morris_HL_2014(ρ, a, T, ρ_crit=550.0, ar1=0.07, ar2=0.03, QMorris = 60.e3, kHL = 11.0, Estar = 10.16e3, **kwargs):
+    
+    Tavg = utilities.lift3d(utilities.depth_average(T))
+    slope = -0.0009667915546575245 * QMorris /1.e3 + 0.001947860800510695
+    intercept = 0.29455063899108685* QMorris /1.e3 - 2.652540535829697
+    δE = (slope*self.Tavg + intercept) * 1000
+    kMoris = kHL * exp(-(Estar - δE) / (R * Tavg))
+    # Annika, what do we need for each of these models?
+
+    c = firedrake.conditional(ρ<ρ_crit,kMorris/(ρ_W* year**2 / 1.0e-6/1000.0*g)*(1/Hx),0.0)
+
+
+    dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
+
+    return None
+
+def KuipersMunneke_2015(ρ, a, T, ρ_crit=550.0, ar1=0.07, ar2=0.03, **kwargs):
+
+    m0 = max_value(1.042 - 0.0916 * log(a*(ρ_I * year**2 / 1.0e-6)),firedrake.Constant(.25))
+    m1 = max_value(1.734 - 0.2039 * log(a*(ρ_I * year**2 / 1.0e-6)),firedrake.Constant(.25))
+
+    c = firedrake.conditional(ρ<ρ_crit,m0*ar1*a*ρ_I/ρ_W*g*exp(-Ec/(R*T) + Eg/(R*Tavg)),m1*ar2*a*ρ_I/ρ_W*g*exp(-Ec/(R*T) + Eg/(R*Tavg)))
+
+    dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
+
+    return dρdt  
+
+
+def Goujon_2003(ρ, a, T, ρ_crit=550.0, ar1=0.07, ar2=0.03, F0=0.8, F1=1.25, **kwargs):
+    # Annika, this is another model where I could use some help with the development.
+    return None
 
 
 class FirnModel:
@@ -66,7 +209,7 @@ class FirnModel:
     Alternative models for the densification rate can be supplied via dρdt.
     """
 
-    def __init__(self, dρdt=HarronLangway):
+    def __init__(self, dρdt=HerronLangway):
     	self.dρdt=add_kwarg_wrapper(dρdt)
     
     def density_gradient_flux(self, **kwargs):
@@ -138,7 +281,7 @@ class FirnModel:
         keys = ('firn_thickness','firn_velocity','density')
         keys_alt = ('h_f','w_f','ρ')
         h_f, w, ρ = get_kwargs_alt(kwargs, keys, keys_alt)
-            
+        
         Q = w.function_space()
         η = firedrake.TestFunction(Q)
 
@@ -162,7 +305,7 @@ class FirnModel:
             surface accumulation
         """
 
-        keys = ('firn_thickness','firn_velocity','density','firn_temperature','accumulation')
+        keys = ('firn_thickness','firn_velocity','density','temperature','accumulation')
         keys_alt = ('h_f','w_f','ρ','T_f','a')
         h_f, w, ρ, T, a = get_kwargs_alt(kwargs, keys, keys_alt)
         dρdt = self.dρdt(ρ, a, T, **kwargs)
