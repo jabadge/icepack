@@ -48,7 +48,13 @@ from icepack.utilities import (
 def density2stress(ρ):
     # We need a density to stress function of some kind.
     return None
+def fac(ρ,h_f):
+    # firn air content
+    return None
 
+def melt_water_content(ρ,h_f):
+    # melt water content for percolation
+    return None
 
 def HerronLangway(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5,**kwargs):
     r""" Herron-Langway densification model
@@ -71,7 +77,7 @@ def HL_Sigfus(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL
     c=firedrake.conditional(ρ<ρ_crit,k1*exp(-Q1/(R*T))*(a*ρ_I/ρ_W)**aHL,ksig*dσ/(g*log((ρ_I/ρ_W -ρ_crit/ρ_W))))
     dρdt=firedrake.condition(ρ< _I* year**2 / 1.0e-6,c*((ρ_I * year**2 / 1.0e-6)-ρ),0.0)
 
-    return dρdt
+    return None
 
 
 def Arthern_2010T(ρ, a, T, r, ρ_crit=550.0, kc1=9.2e-9, kc2=3.7e-9,**kwargs):
@@ -234,7 +240,7 @@ class FirnModel:
         Q = ρ.function_space()
         ϕ = firedrake.TestFunction(Q)
         
-        return w*ρ.dx(2)*ϕ*dx
+        return w*-h_f*ρ.dx(2)/-h_f*ϕ*-h_f*dx
 
     def densification(self, **kwargs):
         r"""Return the densification part of the density residual
@@ -263,7 +269,7 @@ class FirnModel:
         Q = ρ.function_space()
         ϕ = firedrake.TestFunction(Q)
             
-        return -dρdt*ϕ*h_f*dx
+        return dρdt*ϕ*-h_f*dx
 
     def velocity_gradient_flux(self, **kwargs):
         r"""Return the velocity gradient part of the 
@@ -286,7 +292,7 @@ class FirnModel:
         η = firedrake.TestFunction(Q)
 
 
-        return ρ*w.dx(2)*η*dx
+        return -ρ*w.dx(2)*(-h_f)/(-h_f)*η*-h_f*dx
 
     def densification_velocity(self, **kwargs):
         r"""Return the densification velocity part of 
@@ -314,4 +320,4 @@ class FirnModel:
         Q = w.function_space()
         η = firedrake.TestFunction(Q)
             
-        return -dρdt*η*h_f*dx
+        return dρdt*η*-h_f*dx

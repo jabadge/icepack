@@ -121,12 +121,12 @@ class FirnSolver:
         ρ_0 = ρ.copy(deepcopy=True)
         w_0 = w.copy(deepcopy=True)
         ϕ = firedrake.TestFunction(ρ.function_space())
-        F = (ρ_0-ρ)*ϕ*h_f*dx - dt*dρ_dt
+        F = (ρ-ρ_0)*ϕ*-h_f*dx + dt*dρ_dt
         G = wflux + ρvel
 
 
         self._ρbcs = firedrake.DirichletBC(ρ.function_space(), ρ_s,'bottom')
-        self._wbcs = firedrake.DirichletBC(w.function_space(),  -a * ρ_I * year**2 / 1.0e-6 /ρ_s,'bottom')
+        self._wbcs = firedrake.DirichletBC(w.function_space(),  a*ρ_I*year**2/1.0e-6/ρ_s/h_f,'bottom')
 
         degree = ρ.ufl_element().degree()
         fc_params = {'quadrature_degree': (3 * degree[0], 2 * degree[1])}
