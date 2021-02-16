@@ -83,7 +83,7 @@ def Arthern_2010T(ρ, a, T, r, ρ_crit=550.0, kc1=9.2e-9, kc2=3.7e-9,**kwargs):
 
     c=firedrake.conditional(ρ<ρ_crit,kc1*exp(-Ec/(R*T))*σ/r,kc2*exp(-Ec/(R*T))*σ/r)
     dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
-    return dρdt
+    return None
 
 def Helsen_2008(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5, **kwargs):
     r""" Helsen 2008 implementation of equation
@@ -234,7 +234,7 @@ class FirnModel:
         Q = ρ.function_space()
         ϕ = firedrake.TestFunction(Q)
         
-        return w*ρ.dx(2)*ϕ*h_f*dx
+        return w*ρ.dx(2)*ϕ*dx
 
     def densification(self, **kwargs):
         r"""Return the densification part of the density residual
@@ -263,7 +263,7 @@ class FirnModel:
         Q = ρ.function_space()
         ϕ = firedrake.TestFunction(Q)
             
-        return dρdt*ϕ*dx
+        return -dρdt*ϕ*h_f*dx
 
     def velocity_gradient_flux(self, **kwargs):
         r"""Return the velocity gradient part of the 
@@ -285,7 +285,8 @@ class FirnModel:
         Q = w.function_space()
         η = firedrake.TestFunction(Q)
 
-        return ρ*w.dx(2)*η*h_f*dx
+
+        return ρ*w.dx(2)*η*dx
 
     def densification_velocity(self, **kwargs):
         r"""Return the densification velocity part of 
@@ -313,4 +314,4 @@ class FirnModel:
         Q = w.function_space()
         η = firedrake.TestFunction(Q)
             
-        return dρdt*η*h_f*dx
+        return -dρdt*η*h_f*dx

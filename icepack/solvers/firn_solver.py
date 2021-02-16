@@ -81,6 +81,7 @@ class FirnSolver:
         self._solver_parameters = kwargs.get(
             'densification_solver_parameters', default_solver_parameters
         )
+
     @property
     def model(self):
         r"""The frin model that this object solves"""
@@ -120,11 +121,12 @@ class FirnSolver:
         ρ_0 = ρ.copy(deepcopy=True)
         w_0 = w.copy(deepcopy=True)
         ϕ = firedrake.TestFunction(ρ.function_space())
-        F = (ρ - ρ_0) * ϕ * h_f * dx - dt * dρ_dt
+        F = (ρ_0-ρ)*ϕ*h_f*dx - dt*dρ_dt
         G = wflux + ρvel
 
-        self._ρbcs = firedrake.DirichletBC(ρ.function_space(), ρ_s,'top')
-        self._wbcs = firedrake.DirichletBC(w.function_space(), -a * ρ_I * year**2 / 1.0e-6 /ρ_s,'top')
+
+        self._ρbcs = firedrake.DirichletBC(ρ.function_space(), ρ_s,'bottom')
+        self._wbcs = firedrake.DirichletBC(w.function_space(),  -a * ρ_I * year**2 / 1.0e-6 /ρ_s,'bottom')
 
         degree = ρ.ufl_element().degree()
         fc_params = {'quadrature_degree': (3 * degree[0], 2 * degree[1])}
@@ -159,6 +161,8 @@ class FirnSolver:
         self._density_old.assign(ρ)
         self._timestep.assign(dt)
         self._density_solver.solve()
+
+        
         return ρ.copy(deepcopy=True)
 
     def solve_velocity(self,dt, **kwargs):
