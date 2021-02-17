@@ -17,6 +17,7 @@ from icepack.models.damage_transport import DamageTransport
 from icepack.models.heat_transport import HeatTransport3D
 from icepack.models.shallow_ice import ShallowIce
 from icepack.models.firn import FirnModel
+from icepack.models.age_transport import AgeTransport
 
 __all__ = [
     'IceShelf',
@@ -25,5 +26,6 @@ __all__ = [
     'DamageTransport',
     'HeatTransport3D',
     'ShallowIce',
-    'FirnModel'
+    'FirnModel',
+    'AgeTransport'
 ]

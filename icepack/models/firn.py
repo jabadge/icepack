@@ -42,14 +42,13 @@ from icepack.utilities import (
     get_kwargs_alt
 )
 
-### TODO: Make this dependent on gradient/search and find the z-dimension of interval mesh.
 
 
 def density2stress(ρ):
     # We need a density to stress function of some kind.
     return None
 def fac(ρ,h_f):
-    # firn air content
+    # firn air content function
     return None
 
 def melt_water_content(ρ,h_f):
