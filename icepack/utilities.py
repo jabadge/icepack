@@ -14,7 +14,9 @@ r"""Miscellaneous utilities for depth-averaging 3D fields, computing
 horizontal gradients of 3D fields, lifting 2D fields into 3D, etc."""
 
 import warnings
+import functools
 import inspect
+import sympy
 import numpy as np
 import firedrake
 from firedrake import sqrt, tr, det
@@ -45,6 +47,9 @@ def get_kwargs_alt(dictionary, keys, keys_alt):
     return tuple((dictionary.get(key, dictionary.get(alt_key))
                   for key, alt_key in zip(keys, keys_alt)))
 
+
+def _legendre(n, ζ):
+    return sympy.functions.special.polynomials.legendre(n,2 * ζ -1)
 
 def facet_normal_2(mesh):
     r"""Compute the horizontal component of the unit outward normal vector
@@ -167,6 +172,60 @@ def lift3d(q2d, Q3D):
     assert q3d.dat.data_ro.shape == q2d.dat.data_ro.shape
     q3d.dat.data[:] = q2d.dat.data_ro[:]
     return q3d
+
+
+@functools.lru_cache(maxsize=None)
+def vertically_integrate(q):
+    r"""
+    q : firedrake.Function
+        integrand
+    h : firedrake.Function
+        ice thickness
+    """
+    def weight(n,ζ):
+        norm=(1/sympy.integrate(_legendre(n,ζ)**2,(ζ,0,1)))**.5
+        return sympy.lambdify(ζ,norm*_legendre(n,ζ),'numpy')
+
+    def coefficient(n,q,ζ,ζsym,Q):
+        a_n=depth_average(q,weight=weight(n,ζsym)(ζ))
+        a_n3d=lift3d(a_n,Q)
+        return a_n3d
+
+    def recurrance_relation(n,ζ):
+        if n>0:
+            return sympy.lambdify(ζ,(1/(2*(2*n+1)))*(_legendre(n+1,ζ)-_legendre(n-1,ζ)),'numpy')
+        elif n==0:
+            return sympy.lambdify(ζ,ζ,'numpy')
+        if n<0:
+            raise ValueError("n must be positive")
+
+
+    Q=q.function_space()
+    mesh=Q.mesh()
+    x,y,ζ=firedrake.SpatialCoordinate(mesh)
+    xdegree_q,zdegree_q=q.ufl_element().degree()
+
+    ζsym = sympy.symbols('ζsym', real=True, positive=True)
+
+    w3d=firedrake.Function(Q)
+    w3d=sum([coefficient(k,q,ζ,ζsym,Q) * recurrance_relation(k,ζsym)(ζ) for k in range(zdegree_q)])
+    return w3d
+
+def vertical_velocity(u,h,m=0.0):
+    r"""
+    u : firedrake.Function
+        ice velocity
+    h : firedrake.Function
+        ice thickness
+    m : firedrake.Function
+        basal vertical velocity
+    """
+    Q = h.function_space()
+    mesh=Q.mesh()
+    xdegree_u, zdegree_u = u.ufl_element().degree()
+    W = firedrake.FunctionSpace(mesh,family='CG',degree=xdegree_u,vfamily='GL',vdegree=zdegree_u)
+    u_div=firedrake.interpolate(u[0].dx(0)+u[1].dx(1),W)
+    return (m/h-vertically_integrate(u_div))
 
 
 def add_kwarg_wrapper(func):

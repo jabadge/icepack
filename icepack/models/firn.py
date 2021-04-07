@@ -10,8 +10,6 @@
 # The full text of the license can be found in the file LICENSE in the
 # icepack source directory or at <http://www.gnu.org/licenses/>.
 
-import functools
-import sympy
 import firedrake
 from firedrake import (
     max_value, grad, exp, log, inner, outer, sym, Identity, tr as trace, sqrt, dx, ds_b, ds_v
@@ -39,23 +37,34 @@ from icepack.utilities import (
     facet_normal_2,
     grad_2,
     add_kwarg_wrapper,
-    get_kwargs_alt
+    get_kwargs_alt,
+    vertically_integrate
 )
 
 
 
-def density2stress(ρ):
-    # We need a density to stress function of some kind.
-    return None
-def fac(ρ,h_f):
-    # firn air content function
-    return None
+def density2stress(ρ,h_f):
+    Q=ρ.function_space()
+    mesh=Q.mesh()
+    xdegree, zdegree = ρ.ufl_element().degree()
+    W = firedrake.FunctionSpace(mesh,family='DG',degree=xdegree,vfamily='GL',vdegree=zdegree+1)
+    integrand=firedrake.interpolate(-ρ*g,Q)
+    return firedrake.interpolate(vertically_integrate(integrand),W)
 
-def melt_water_content(ρ,h_f):
+def fac(ρ, h_f):
+    # firn air content function
+    Q=ρ.function_space()
+    mesh=Q.mesh()
+    xdegree, zdegree = ρ.ufl_element().degree()
+    W = firedrake.FunctionSpace(mesh,family='DG',degree=xdegree,vfamily='GL',vdegree=zdegree+1)
+    integrand=(firedrake.Constant(ρ_I)-ρ)
+    return firedrake.interpolate(vertically_integrate(integrand),W)
+
+def melt_water_content(E, h_f):
     # melt water content for percolation
     return None
 
-def HerronLangway(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5,**kwargs):
+def HerronLangway(ρ, a, T, h_f, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL=1.0, bHL=0.5,**kwargs):
     r""" Herron-Langway densification model
     Need to understand the units of k1 and k2 and make sure
     these are consistent with the model units.
@@ -69,14 +78,14 @@ def HL_Sigfus(ρ, a, T, ρ_crit=550.0, k1=11.0, k2=575.0, Q1=10.16, Q2=21.4, aHL
     r""" Sigfus implementation of the Herron-Langway 
     """
 
-    σ=density2stress(ρ)
+    σ=density2stress(ρ,h_f)
     dρ=(ρ_I * year**2 / 1.0e-6 - ρ) / 1000.0
     dσ=σ-σ_crit
     ksig=k2 * exp(-Q2/(R*T))**2
     c=firedrake.conditional(ρ<ρ_crit,k1*exp(-Q1/(R*T))*(a*ρ_I/ρ_W)**aHL,ksig*dσ/(g*log((ρ_I/ρ_W -ρ_crit/ρ_W))))
     dρdt=firedrake.condition(ρ< _I* year**2 / 1.0e-6,c*((ρ_I * year**2 / 1.0e-6)-ρ),0.0)
 
-    return None
+    return dρdt
 
 
 def Arthern_2010T(ρ, a, T, r, ρ_crit=550.0, kc1=9.2e-9, kc2=3.7e-9,**kwargs):
@@ -165,7 +174,7 @@ def Barnola_1991(ρ, a, T, ρ_crit=550.0, Q1=10160.0, k1=11.0,
     aHL=1.0, α=-37.455, β=99.743, δ=-95.027,γ=30.673, A0b=2.54e4,
     n=3.0, Q=60.0e3, close_off=800.0, **kwargs):
     # Annika, this is another one where I need help understanding what Max is doing
-    #/ also what whether this is even a model worth including!
+    #/ also whether this is even a model worth including!
 
     dρdt = c*((ρ_I * year**2 / 1.0e-6)-ρ)
 

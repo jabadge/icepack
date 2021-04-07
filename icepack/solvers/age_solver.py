@@ -45,20 +45,25 @@ class AgeSolver:
                     self._fields[name] = field.copy(deepcopy=True)
                 else:
                     raise TypeError('Input fields must be Constant or Function!')
+
         # Create symbolic representations of the flux and sources of damage
         dt = firedrake.Constant(1.0)
         flux = self.model.flux(**self.fields)
+
         # Create the finite element mass matrix
         q = self.fields.get('age', self.fields.get('age'))
         Q = q.function_space()
         φ, ψ = firedrake.TrialFunction(Q), firedrake.TestFunction(Q)
         M = φ * ψ * dx
+
         L1 = -dt * flux
         q1 = firedrake.Function(Q)
         q2 = firedrake.Function(Q)
         L2 = firedrake.replace(L1, {q: q1})
         L3 = firedrake.replace(L1, {q: q2})
+
         dq = firedrake.Function(Q)
+        
         parameters = {
             'solver_parameters': {
                 'ksp_type': 'preonly',
@@ -66,12 +71,14 @@ class AgeSolver:
                 'sub_pc_type': 'ilu'
             }
         }
+
         problem1 = LinearVariationalProblem(M, L1, dq)
         problem2 = LinearVariationalProblem(M, L2, dq)
         problem3 = LinearVariationalProblem(M, L3, dq)
         solver1 = LinearVariationalSolver(problem1, **parameters)
         solver2 = LinearVariationalSolver(problem2, **parameters)
         solver3 = LinearVariationalSolver(problem3, **parameters)
+
         self._solvers = [solver1, solver2, solver3]
         self._stages = [q1, q2]
         self._age_change = dq
@@ -83,18 +90,26 @@ class AgeSolver:
         else:
             for name, field in kwargs.items():
                 self.fields[name].assign(field)
+
         δt = self._timestep
         δt.assign(dt)
         q = self.fields.get('age', self.fields.get('age'))
+
         solver1, solver2, solver3 = self._solvers
         q1, q2 = self._stages
         dq = self._age_change
+
         solver1.solve()
         q1.assign(q + dq)
         solver2.solve()
         q2.assign(3/4 * q + 1/4 * (q1 + dq))
         solver3.solve()
         q.assign(1/3 * q + 2/3 * (q2 + dq))
+        
         max_age = firedrake.Constant(self.model.max_age)
-        q.project(min_value(max_value(q + δt, 0), max_age))
+        q.project(min_value(max_value(q + firedrake.Constant(δt), firedrake.Constant(0.0)), max_age))
         return q.copy(deepcopy=True)
+
+
+
+
