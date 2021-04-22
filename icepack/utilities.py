@@ -175,7 +175,7 @@ def lift3d(q2d, Q3D):
 
 
 @functools.lru_cache(maxsize=None)
-def vertically_integrate(q):
+def vertically_integrate(q,h):
     r"""
     q : firedrake.Function
         integrand
@@ -199,17 +199,15 @@ def vertically_integrate(q):
         if n<0:
             raise ValueError("n must be positive")
 
-
-    Q=q.function_space()
+    Q=h.function_space()
     mesh=Q.mesh()
     x,y,ζ=firedrake.SpatialCoordinate(mesh)
     xdegree_q,zdegree_q=q.ufl_element().degree()
 
     ζsym = sympy.symbols('ζsym', real=True, positive=True)
 
-    w3d=firedrake.Function(Q)
-    w3d=sum([coefficient(k,q,ζ,ζsym,Q) * recurrance_relation(k,ζsym)(ζ) for k in range(zdegree_q)])
-    return w3d
+    q_int=sum([coefficient(k,q,ζ,ζsym,Q) * recurrance_relation(k,ζsym)(ζ) for k in range(zdegree_q)])
+    return q_int
 
 def vertical_velocity(u,h,m=0.0):
     r"""
@@ -221,11 +219,11 @@ def vertical_velocity(u,h,m=0.0):
         basal vertical velocity
     """
     Q = h.function_space()
-    mesh=Q.mesh()
+    mesh = Q.mesh()
     xdegree_u, zdegree_u = u.ufl_element().degree()
     W = firedrake.FunctionSpace(mesh,family='CG',degree=xdegree_u,vfamily='GL',vdegree=zdegree_u)
-    u_div=firedrake.interpolate(u[0].dx(0)+u[1].dx(1),W)
-    return (m/h-vertically_integrate(u_div))
+    u_div = firedrake.interpolate(u[0].dx(0)+u[1].dx(1),W)
+    return (m/h-vertically_integrate(u_div,h))
 
 
 def add_kwarg_wrapper(func):
