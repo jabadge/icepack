@@ -18,15 +18,32 @@ from firedrake import (
     inner, grad, div, dx, ds, ds_t, ds_v, dS_v, dS_h, dS, sqrt, det, min_value, max_value, conditional
 )
 from icepack.constants import year
-from icepack.utilities import eigenvalues, vertical_velocity, get_kwargs_alt
+from icepack.utilities import eigenvalues, vertical_velocity, get_kwargs_alt, add_kwarg_wrapper
+
+def velocity_3D(**kwargs):
+    keys = ('thickness', 'velocity')
+    keys_alt = ('h','u')
+    h, u = get_kwargs_alt(kwargs, keys, keys_alt)
+
+    Q = h.function_space()
+    V = u.function_space()
+    mesh = Q.mesh()
+    xdegree_u, zdegree_u = u.ufl_element().degree()
+    W = firedrake.FunctionSpace(mesh, family='CG', degree=2, vfamily='GL', vdegree=1+V.ufl_element().degree()[1])
+    w = firedrake.interpolate(vertical_velocity(u,h),W)
+    V3D = firedrake.VectorFunctionSpace(mesh, dim=3, family='CG', degree=xdegree_u, vfamily='GL',vdegree=zdegree_u+1)
+    u3D = firedrake.Function(V3D).interpolate(firedrake.as_vector((u[0],u[1],w)))
+    return u3D 
 
 
 class AgeTransport:
     def __init__(
         self,
-        max_age=2000000.0
+        max_age=2000000.0,
+        velocity_3D=velocity_3D
     ):
         self.max_age = max_age
+        self.velocity_3D = add_kwarg_wrapper(velocity_3D)
 
 
         
@@ -37,13 +54,9 @@ class AgeTransport:
 
         Q = h.function_space()
         U = q.function_space()
-        V = u.function_space()
         mesh = Q.mesh()
-        W = firedrake.FunctionSpace(mesh, family='CG', degree=2, vfamily='GL', vdegree=1+V.ufl_element().degree()[1])
         
         φ = firedrake.TestFunction(U)
-
-        w = firedrake.interpolate(vertical_velocity(u,h),W)
 
         xdegree_u, zdegree_u = u.ufl_element().degree()
         degree_h = h.ufl_element().degree()[0]
@@ -51,8 +64,8 @@ class AgeTransport:
         metadata = {'quadrature_degree': degree}
         ice_front_ids = tuple(kwargs.pop('ice_front_ids', ()))
         ds_terminus = ds_v(domain=mesh, subdomain_id=ice_front_ids, metadata=metadata)
-        V3D = firedrake.VectorFunctionSpace(mesh,dim=3, family='CG',degree=xdegree_u,vfamily='GL',vdegree=zdegree_u+1)
-        u3D = firedrake.Function(V3D).interpolate(firedrake.as_vector((u[0],u[1],w)))
+
+        u3D = self.velocity_3D(**kwargs)
 
         n = firedrake.FacetNormal(mesh)
         u_n = max_value(0, inner(u3D, n))
