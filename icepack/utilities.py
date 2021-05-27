@@ -143,3 +143,72 @@ def add_kwarg_wrapper(func):
         return func(*args, **kwargs_)
 
     return wrapper
+
+
+
+@functools.lru_cache(maxsize=None)
+def vertically_integrate(q,h):
+    r"""
+    q : firedrake.Function
+        integrand
+    h : firedrake.Function
+        ice thickness
+    """
+    def weight(n,ζ):
+        norm=(1/sympy.integrate(_legendre(n,ζ)**2,(ζ,0,1)))**.5
+        return sympy.lambdify(ζ,norm*_legendre(n,ζ),'numpy')
+
+    def coefficient(n,q,ζ,ζsym,Q):
+        a_n=depth_average(q,weight=weight(n,ζsym)(ζ))
+        a_n3d=lift3d(a_n,Q)
+        return a_n3d
+
+    def recurrance_relation(n,ζ):
+        if n>0:
+            return sympy.lambdify(ζ,(1/(2*(2*n+1)))*(_legendre(n+1,ζ)-_legendre(n-1,ζ)),'numpy')
+        elif n==0:
+            return sympy.lambdify(ζ,ζ,'numpy')
+        if n<0:
+            raise ValueError("n must be positive")
+
+    Q=h.function_space()
+    mesh=Q.mesh()
+    x,y,ζ=firedrake.SpatialCoordinate(mesh)
+    xdegree_q,zdegree_q=q.ufl_element().degree()
+
+    ζsym = sympy.symbols('ζsym', real=True, positive=True)
+
+    q_int=sum([coefficient(k,q,ζ,ζsym,Q) * recurrance_relation(k,ζsym)(ζ) for k in range(zdegree_q)])
+    return q_int
+
+def vertical_velocity(u,h,m=0.0):
+    r"""
+    u : firedrake.Function
+        ice velocity
+    h : firedrake.Function
+        ice thickness
+    m : firedrake.Function
+        basal vertical velocity
+    """
+    Q = h.function_space()
+    mesh = Q.mesh()
+    xdegree_u, zdegree_u = u.ufl_element().degree()
+    W = firedrake.FunctionSpace(mesh,family='CG',degree=xdegree_u,vfamily='GL',vdegree=zdegree_u)
+    u_div = firedrake.interpolate(u[0].dx(0)+u[1].dx(1),W)
+    return (m/h-vertically_integrate(u_div,h))
+
+
+def add_kwarg_wrapper(func):
+    signature = inspect.signature(func)
+    if any(str(signature.parameters[param].kind) == 'VAR_KEYWORD'
+           for param in signature.parameters):
+        return func
+
+    params = signature.parameters
+
+    def wrapper(*args, **kwargs):
+        kwargs_ = dict((key, kwargs[key]) for key in kwargs if key in params)
+        return func(*args, **kwargs_)
+
+    return wrapper
+

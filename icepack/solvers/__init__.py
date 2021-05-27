@@ -13,11 +13,13 @@
 from .flow_solver import FlowSolver, ImplicitEuler, LaxWendroff
 from .heat_transport import HeatTransportSolver
 from .damage_solver import DamageSolver
+from .age_solver import AgeSolver
 
 __all__ = [
-    "FlowSolver",
-    "ImplicitEuler",
-    "LaxWendroff",
-    "HeatTransportSolver",
-    "DamageSolver",
+    'FlowSolver',
+    'ImplicitEuler',
+    'LaxWendroff',
+    'HeatTransportSolver',
+    'DamageSolver',
+    'AgeSolver'
 ]
