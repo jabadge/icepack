@@ -83,7 +83,6 @@ class AgeSolver:
         self._stages = [q1, q2]
         self._age_change = dq
         self._timestep = dt
-        self.flux = flux
         
     def solve(self, dt, **kwargs):
         if not hasattr(self, '_solvers'):
@@ -109,8 +108,4 @@ class AgeSolver:
         
         max_age = firedrake.Constant(self.model.max_age)
         q.project(min_value(max_value(q + firedrake.Constant(δt), firedrake.Constant(0.0)), max_age))
-        return q.copy(deepcopy=True), self.flux
-
-
-
-
+        return q.copy(deepcopy=True)
