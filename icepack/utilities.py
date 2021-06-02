@@ -128,25 +128,6 @@ def lift3d(q2d, Q3D):
     return q3d
 
 
-def add_kwarg_wrapper(func):
-    signature = inspect.signature(func)
-    if any(
-        str(signature.parameters[param].kind) == "VAR_KEYWORD"
-        for param in signature.parameters
-    ):
-        return func
-
-    params = signature.parameters
-
-    def wrapper(*args, **kwargs):
-        kwargs_ = dict((key, kwargs[key]) for key in kwargs if key in params)
-        return func(*args, **kwargs_)
-
-    return wrapper
-
-
-
-@functools.lru_cache(maxsize=None)
 def vertically_integrate(q,h):
     r"""
     q : firedrake.Function

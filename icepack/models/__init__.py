@@ -16,6 +16,7 @@ from icepack.models.hybrid import HybridModel
 from icepack.models.damage_transport import DamageTransport
 from icepack.models.heat_transport import HeatTransport3D
 from icepack.models.shallow_ice import ShallowIce
+from icepack.models.age_transport import AgeTransport
 
 __all__ = [
     "IceShelf",

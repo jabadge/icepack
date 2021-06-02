@@ -13,17 +13,16 @@
 r"""Description of the age transport model.
 """
 
+from operator import itemgetter
 import firedrake
 from firedrake import (
     inner, grad, div, dx, ds, ds_t, ds_b, ds_tb, ds_v, dS_v, dS_h, dS, sqrt, det, min_value, max_value, conditional
 )
 from icepack.constants import year
-from icepack.utilities import eigenvalues, vertical_velocity, get_kwargs_alt, add_kwarg_wrapper
+from icepack.utilities import eigenvalues, vertical_velocity, add_kwarg_wrapper
 
 def velocity_3D(**kwargs):
-    keys = ('thickness', 'velocity')
-    keys_alt = ('h','u')
-    h, u = get_kwargs_alt(kwargs, keys, keys_alt)
+    u, h = itemgetter("velocity", "thickness")(kwargs)
 
     Q = h.function_space()
     V = u.function_space()
@@ -48,9 +47,7 @@ class AgeTransport:
 
         
     def flux(self, **kwargs):
-        keys = ('thickness', 'velocity', 'age')
-        keys_alt = ('h','u','age')
-        h, u, q = get_kwargs_alt(kwargs, keys, keys_alt)
+        u, h, q = itemgetter("velocity", "thickness", "age")(kwargs)
 
         u3D = self.velocity_3D(**kwargs)
 
@@ -73,10 +70,10 @@ class AgeTransport:
         u_n = max_value(0, inner(u3D, n))
         f = q * u_n
         q_inflow=firedrake.Constant(0.0)
-        flux_faces_h = (f('+') - f('-')) * (φ('+') - φ('-')) * dS_h
+        flux_faces_v = (f('+') - f('-')) * (φ('+') - φ('-')) * dS_v
         flux_cells = -q * div(u3D * φ) * dx
         #flux_terminus = q * max_value(0, inner(u3D, n)) * φ * ds_terminus
         #flux_surface = q_inflow * min_value(0, inner(u3D, n)) * φ * ds_t
-        flux_h = q * max_value(0, inner(u3D, n)) * φ * ds_h
+        #flux_h = q * max_value(0, inner(u3D, n)) * φ * ds_h
         flux_tb = q * max_value(0, inner(u3D, n)) * φ * ds_tb
-        return flux_cells + flux_faces_v + flux_h + flux_tb
+        return flux_cells + flux_faces_v + flux_tb
